@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Calorie Compass Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero__copy">
+          <p class="eyebrow">Авторизация</p>
+          <h1>Вход в Calorie Compass</h1>
+          <p class="hero__text">
+            У каждого пользователя свой дневник и свои цели, а справочник блюд и продуктов
+            остается общим и переиспользуется всеми.
+          </p>
+        </div>
+        <div class="hero__panel">
+          <div class="hero__metric">
+            <span>Личный дневник</span>
+            <strong>Да</strong>
+          </div>
+          <div class="hero__metric">
+            <span>Общий справочник</span>
+            <strong>Да</strong>
+          </div>
+          <div class="hero__metric">
+            <span>Аналитика</span>
+            <strong>14 дней</strong>
+          </div>
+        </div>
+      </header>
+
+      <section id="auth-card" class="card auth-card auth-card--centered">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">Аккаунт</p>
+            <h2>Войти в аккаунт</h2>
+          </div>
+        </div>
+
+        <p class="hero__text auth-card__text">
+          Введите email и пароль, чтобы открыть свой дневник питания, цели по КБЖУ и ежедневную аналитику.
+        </p>
+
+        <form id="auth-form" class="form-grid">
+          <label class="field">
+            <span>Email</span>
+            <input id="auth-email" type="email" required placeholder="name@example.com" />
+          </label>
+          <label class="field">
+            <span>Пароль</span>
+            <input id="auth-password" type="password" required placeholder="Минимум 6 символов" />
+          </label>
+          <div class="form-actions">
+            <button class="button button--primary" type="submit">Войти</button>
+            <a class="button button--ghost auth-link" href="/register">Создать аккаунт</a>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div id="toast" class="toast" aria-live="polite"></div>
+
+    <script src="./login.js"></script>
+  </body>
+</html>

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Calorie Compass</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero__copy">
+          <p class="eyebrow">Личный трекер КБЖУ</p>
+          <h1>Справочник общий, дневник личный</h1>
+          <p class="hero__text">
+            У каждого пользователя свой учет питания и свои цели, а блюда и продукты
+            живут в едином справочнике и переиспользуются всей командой или семьей.
+          </p>
+        </div>
+        <div class="hero__panel">
+          <div class="hero__metric">
+            <span>Сегодня</span>
+            <strong id="hero-date">-</strong>
+          </div>
+          <div class="hero__metric">
+            <span>Записей</span>
+            <strong id="hero-entry-count">0</strong>
+          </div>
+          <div class="hero__metric">
+            <span>Справочник</span>
+            <strong id="hero-food-count">0</strong>
+          </div>
+        </div>
+      </header>
+      <main id="app-content" class="layout">
+        <section class="card card--wide user-bar">
+          <div class="section-heading user-bar__wrap">
+            <div>
+              <p class="section-kicker">Пользователь</p>
+              <h2 id="current-user"></h2>
+            </div>
+            <button id="logout-button" class="button button--ghost" type="button">Выйти</button>
+          </div>
+        </section>
+
+        <section class="card card--accent">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Дневник</p>
+              <h2>Добавить прием пищи</h2>
+            </div>
+            <label class="field">
+              <span>Дата</span>
+              <input id="selected-date" type="date" />
+            </label>
+          </div>
+
+          <form id="meal-form" class="form-grid">
+            <label class="field field--wide">
+              <span>Блюдо из общего справочника</span>
+              <input
+                id="meal-search"
+                list="food-options"
+                placeholder="Выберите блюдо и изготовителя"
+                autocomplete="off"
+                required
+              />
+              <datalist id="food-options"></datalist>
+            </label>
+
+            <label class="field">
+              <span>Вес, г</span>
+              <input id="meal-grams" type="number" min="1" step="1" placeholder="Например, 250" required />
+            </label>
+
+            <div class="form-actions">
+              <button class="button button--primary" type="submit">Добавить в дневник</button>
+            </div>
+          </form>
+
+          <div class="hint-box">
+            <strong>Блюдо еще не заведено?</strong>
+            <p>
+              Добавьте его в общий справочник ниже вместе с изготовителем. После этого
+              им смогут пользоваться все пользователи сервиса.
+            </p>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Справочник</p>
+              <h2>Общие блюда и продукты</h2>
+            </div>
+            <div class="pill" id="foods-count-pill">0 блюд</div>
+          </div>
+
+          <form id="food-form" class="form-grid">
+            <label class="field field--wide">
+              <span>Название блюда</span>
+              <input id="food-name" type="text" placeholder="Например, творог 5%" required />
+            </label>
+            <label class="field field--wide">
+              <span>Изготовитель</span>
+              <input id="food-manufacturer" type="text" placeholder="Например, Простоквашино" required />
+            </label>
+            <label class="field">
+              <span>Ккал / 100 г</span>
+              <input id="food-calories" type="number" min="0" step="0.1" required />
+            </label>
+            <label class="field">
+              <span>Белки / 100 г</span>
+              <input id="food-protein" type="number" min="0" step="0.1" required />
+            </label>
+            <label class="field">
+              <span>Жиры / 100 г</span>
+              <input id="food-fat" type="number" min="0" step="0.1" required />
+            </label>
+            <label class="field">
+              <span>Углеводы / 100 г</span>
+              <input id="food-carbs" type="number" min="0" step="0.1" required />
+            </label>
+            <div class="form-actions">
+              <button class="button button--primary" type="submit" id="food-submit-button">
+                Сохранить блюдо
+              </button>
+              <button class="button button--ghost" type="button" id="food-cancel-edit" hidden>
+                Отменить редактирование
+              </button>
+            </div>
+          </form>
+
+          <div id="foods-empty" class="empty-state">
+            Справочник пока пуст. Добавьте первое блюдо с указанием изготовителя, чтобы им могли пользоваться все.
+          </div>
+          <div id="foods-list" class="food-list"></div>
+        </section>
+
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Цели</p>
+              <h2>Ваши личные лимиты по КБЖУ</h2>
+            </div>
+          </div>
+
+          <form id="goals-form" class="form-grid">
+            <label class="field">
+              <span>Калории</span>
+              <input id="goal-calories" type="number" min="0" step="1" required />
+            </label>
+            <label class="field">
+              <span>Белки, г</span>
+              <input id="goal-protein" type="number" min="0" step="0.1" required />
+            </label>
+            <label class="field">
+              <span>Жиры, г</span>
+              <input id="goal-fat" type="number" min="0" step="0.1" required />
+            </label>
+            <label class="field">
+              <span>Углеводы, г</span>
+              <input id="goal-carbs" type="number" min="0" step="0.1" required />
+            </label>
+            <div class="form-actions">
+              <button class="button button--primary" type="submit">Сохранить цели</button>
+            </div>
+          </form>
+
+          <div id="goal-summary" class="goal-summary"></div>
+        </section>
+
+        <section class="card card--wide">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Прогресс</p>
+              <h2>Выполнение нормы за день</h2>
+            </div>
+            <div id="day-status" class="status-badge">Нет данных за день</div>
+          </div>
+
+          <div id="progress-grid" class="progress-grid"></div>
+
+          <div class="section-heading section-heading--tight">
+            <div>
+              <p class="section-kicker">Записи</p>
+              <h2>Что съедено за выбранную дату</h2>
+            </div>
+          </div>
+          <div id="entries-empty" class="empty-state">За эту дату пока нет записей.</div>
+          <div id="entries-list" class="entry-list"></div>
+        </section>
+
+        <section class="card card--wide">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Аналитика</p>
+              <h2>Ежедневная динамика выполнения целей</h2>
+            </div>
+          </div>
+
+          <div id="analytics-summary" class="analytics-summary"></div>
+          <div id="analytics-list" class="analytics-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" aria-live="polite"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
