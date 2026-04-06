@@ -16,6 +16,7 @@
 - `index.html`, `app.js` - основное приложение;
 - `login.html`, `login.js` - вход;
 - `register.html`, `register.js` - регистрация;
+- `requirements.txt` - Python-зависимости для PostgreSQL;
 - `Dockerfile` - контейнерный запуск;
 - `render.yaml` - готовая конфигурация для Render.
 
@@ -53,13 +54,13 @@ docker run -p 4173:4173 -v "$(pwd)/data:/data" -e COOKIE_SECURE=false calorie-co
 1. Загрузите проект в GitHub.
 2. В Render выберите `New +` -> `Blueprint`.
 3. Подключите репозиторий.
-4. Render сам подхватит `render.yaml`, создаст web service и persistent disk.
+4. Render сам подхватит `render.yaml`, создаст web service и PostgreSQL database.
 5. После деплоя получите единый публичный URL для всех пользователей.
 
 Для Render уже настроено:
 
 - health check: `/healthz`
-- постоянное хранилище: `/data`
+- managed PostgreSQL через `DATABASE_URL`
 - secure cookie в production
 
 ## Переменные окружения
@@ -68,10 +69,11 @@ docker run -p 4173:4173 -v "$(pwd)/data:/data" -e COOKIE_SECURE=false calorie-co
 - `PORT` - порт, по умолчанию `4173`
 - `DATA_DIR` - директория для SQLite-файла
 - `DB_PATH` - явный путь до SQLite, если нужен
+- `DATABASE_URL` - если задан, приложение использует PostgreSQL вместо SQLite
 - `COOKIE_SECURE` - ставить ли флаг `Secure` у cookie
 
 ## Данные
 
 - локальная тестовая база не должна попадать в репозиторий;
-- для production база должна храниться на persistent disk;
+- в production на Render данные хранятся в PostgreSQL;
 - справочник блюд общий для всех пользователей, а записи и цели персональные.

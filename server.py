@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import sqlite3
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +15,8 @@ from urllib.parse import parse_qs, urlparse
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
 DB_PATH = Path(os.environ.get("DB_PATH", DATA_DIR / "calorie_compass.db"))
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USING_POSTGRES = bool(DATABASE_URL)
 SESSION_COOKIE = "calorie_compass_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 30
 STATIC_FILES = {
@@ -29,75 +32,188 @@ STATIC_FILES = {
     "/register.js": "register.js",
 }
 
+if USING_POSTGRES:
+    from psycopg import connect
+    from psycopg.rows import dict_row
+    from psycopg.errors import UniqueViolation
+else:
+    connect = None
+    dict_row = None
+    UniqueViolation = sqlite3.IntegrityError
 
-def db_connection():
-    connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+
+class Database:
+    def __init__(self):
+        self.using_postgres = USING_POSTGRES
+
+    @contextmanager
+    def connection(self):
+        if self.using_postgres:
+            connection = connect(DATABASE_URL, row_factory=dict_row)
+        else:
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(DB_PATH)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def sql(self, query):
+        if self.using_postgres:
+            return query.replace("?", "%s")
+        return query
+
+    def fetchone(self, connection, query, params=()):
+        cursor = connection.execute(self.sql(query), params)
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def fetchall(self, connection, query, params=()):
+        cursor = connection.execute(self.sql(query), params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def execute(self, connection, query, params=()):
+        return connection.execute(self.sql(query), params)
+
+    def execute_insert(self, connection, query, params=()):
+        if self.using_postgres:
+            cursor = connection.execute(f"{self.sql(query)} RETURNING id", params)
+            return cursor.fetchone()["id"]
+        cursor = connection.execute(self.sql(query), params)
+        return cursor.lastrowid
+
+    def init_db(self):
+        with self.connection() as connection:
+            if self.using_postgres:
+                statements = [
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id BIGSERIAL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        email TEXT NOT NULL UNIQUE,
+                        password_hash TEXT NOT NULL,
+                        password_salt TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """,
+                    """
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        token TEXT PRIMARY KEY,
+                        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        created_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL
+                    )
+                    """,
+                    """
+                    CREATE TABLE IF NOT EXISTS foods (
+                        id BIGSERIAL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        manufacturer TEXT NOT NULL,
+                        calories DOUBLE PRECISION NOT NULL,
+                        protein DOUBLE PRECISION NOT NULL,
+                        fat DOUBLE PRECISION NOT NULL,
+                        carbs DOUBLE PRECISION NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE(name, manufacturer)
+                    )
+                    """,
+                    """
+                    CREATE TABLE IF NOT EXISTS goals (
+                        user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                        calories DOUBLE PRECISION NOT NULL,
+                        protein DOUBLE PRECISION NOT NULL,
+                        fat DOUBLE PRECISION NOT NULL,
+                        carbs DOUBLE PRECISION NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """,
+                    """
+                    CREATE TABLE IF NOT EXISTS entries (
+                        id BIGSERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        food_id BIGINT NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
+                        entry_date TEXT NOT NULL,
+                        grams DOUBLE PRECISION NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """,
+                ]
+                for statement in statements:
+                    connection.execute(statement)
+            else:
+                connection.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        email TEXT NOT NULL UNIQUE,
+                        password_hash TEXT NOT NULL,
+                        password_salt TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        token TEXT PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        created_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    );
+
+                    CREATE TABLE IF NOT EXISTS foods (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        manufacturer TEXT NOT NULL,
+                        calories REAL NOT NULL,
+                        protein REAL NOT NULL,
+                        fat REAL NOT NULL,
+                        carbs REAL NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE(name, manufacturer)
+                    );
+
+                    CREATE TABLE IF NOT EXISTS goals (
+                        user_id INTEGER PRIMARY KEY,
+                        calories REAL NOT NULL,
+                        protein REAL NOT NULL,
+                        fat REAL NOT NULL,
+                        carbs REAL NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    );
+
+                    CREATE TABLE IF NOT EXISTS entries (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        food_id INTEGER NOT NULL,
+                        entry_date TEXT NOT NULL,
+                        grams REAL NOT NULL,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY (food_id) REFERENCES foods(id) ON DELETE CASCADE
+                    );
+                    """
+                )
 
 
-def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with db_connection() as connection:
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                password_salt TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS sessions (
-                token TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS foods (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                manufacturer TEXT NOT NULL,
-                calories REAL NOT NULL,
-                protein REAL NOT NULL,
-                fat REAL NOT NULL,
-                carbs REAL NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(name, manufacturer)
-            );
-
-            CREATE TABLE IF NOT EXISTS goals (
-                user_id INTEGER PRIMARY KEY,
-                calories REAL NOT NULL,
-                protein REAL NOT NULL,
-                fat REAL NOT NULL,
-                carbs REAL NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                food_id INTEGER NOT NULL,
-                entry_date TEXT NOT NULL,
-                grams REAL NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (food_id) REFERENCES foods(id) ON DELETE CASCADE
-            );
-            """
-        )
+db = Database()
 
 
 def now_iso():
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_iso_utc(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def hash_password(password, salt):
@@ -109,21 +225,22 @@ def create_session(connection, user_id):
     token = secrets.token_urlsafe(32)
     created_at = datetime.now(UTC)
     expires_at = created_at + timedelta(days=30)
-    connection.execute(
+    db.execute(
+        connection,
         "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        (token, user_id, created_at.isoformat() + "Z", expires_at.isoformat() + "Z"),
+        (token, user_id, created_at.isoformat().replace("+00:00", "Z"), expires_at.isoformat().replace("+00:00", "Z")),
     )
-    connection.commit()
     return token
 
 
 def get_goals(connection, user_id):
-    row = connection.execute(
+    row = db.fetchone(
+        connection,
         "SELECT calories, protein, fat, carbs FROM goals WHERE user_id = ?",
         (user_id,),
-    ).fetchone()
+    )
     if row:
-        return dict(row)
+        return row
     return {"calories": 2200, "protein": 160, "fat": 70, "carbs": 220}
 
 
@@ -145,7 +262,8 @@ def compute_entry_payload(row):
 
 
 def get_entries_for_date(connection, user_id, date_value):
-    rows = connection.execute(
+    rows = db.fetchall(
+        connection,
         """
         SELECT entries.id, entries.food_id, entries.entry_date, entries.grams, entries.created_at,
                foods.name, foods.manufacturer, foods.calories, foods.protein, foods.fat, foods.carbs
@@ -155,7 +273,7 @@ def get_entries_for_date(connection, user_id, date_value):
         ORDER BY entries.created_at DESC
         """,
         (user_id, date_value),
-    ).fetchall()
+    )
     return [compute_entry_payload(row) for row in rows]
 
 
@@ -207,7 +325,7 @@ class AppHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
 
         if parsed.path == "/healthz":
-            return self.send_json(200, {"ok": True})
+            return self.send_json(200, {"ok": True, "database": "postgres" if USING_POSTGRES else "sqlite"})
 
         if parsed.path in STATIC_FILES:
             return self.serve_static(parsed.path)
@@ -287,29 +405,27 @@ class AppHandler(BaseHTTPRequestHandler):
         salt = secrets.token_hex(16)
         password_hash = hash_password(password, salt)
 
-        with db_connection() as connection:
-            try:
-                cursor = connection.execute(
+        try:
+            with db.connection() as connection:
+                user_id = db.execute_insert(
+                    connection,
                     """
                     INSERT INTO users (name, email, password_hash, password_salt, created_at)
                     VALUES (?, ?, ?, ?, ?)
                     """,
                     (name, email, password_hash, salt, now_iso()),
                 )
-                connection.commit()
-            except sqlite3.IntegrityError:
-                return self.send_json(409, {"error": "Пользователь с таким email уже существует."})
-
-            user_id = cursor.lastrowid
-            connection.execute(
-                """
-                INSERT INTO goals (user_id, calories, protein, fat, carbs, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (user_id, 2200, 160, 70, 220, now_iso()),
-            )
-            connection.commit()
-            token = create_session(connection, user_id)
+                db.execute(
+                    connection,
+                    """
+                    INSERT INTO goals (user_id, calories, protein, fat, carbs, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (user_id, 2200, 160, 70, 220, now_iso()),
+                )
+                token = create_session(connection, user_id)
+        except (sqlite3.IntegrityError, UniqueViolation):
+            return self.send_json(409, {"error": "Пользователь с таким email уже существует."})
 
         return self.send_auth_response(user_id, name, email, token)
 
@@ -318,11 +434,12 @@ class AppHandler(BaseHTTPRequestHandler):
         email = (payload.get("email") or "").strip().lower()
         password = payload.get("password") or ""
 
-        with db_connection() as connection:
-            user = connection.execute(
+        with db.connection() as connection:
+            user = db.fetchone(
+                connection,
                 "SELECT id, name, email, password_hash, password_salt FROM users WHERE email = ?",
                 (email,),
-            ).fetchone()
+            )
 
             if not user:
                 return self.send_json(401, {"error": "Неверный email или пароль."})
@@ -338,9 +455,8 @@ class AppHandler(BaseHTTPRequestHandler):
     def handle_logout(self):
         token = self.get_session_token()
         if token:
-            with db_connection() as connection:
-                connection.execute("DELETE FROM sessions WHERE token = ?", (token,))
-                connection.commit()
+            with db.connection() as connection:
+                db.execute(connection, "DELETE FROM sessions WHERE token = ?", (token,))
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -359,16 +475,16 @@ class AppHandler(BaseHTTPRequestHandler):
         if not user:
             return
 
-        with db_connection() as connection:
-            rows = connection.execute(
+        with db.connection() as connection:
+            rows = db.fetchall(
+                connection,
                 """
                 SELECT id, name, manufacturer, calories, protein, fat, carbs
                 FROM foods
-                ORDER BY name COLLATE NOCASE, manufacturer COLLATE NOCASE
-                """
-            ).fetchall()
-        foods = [dict(row) for row in rows]
-        self.send_json(200, {"foods": foods})
+                ORDER BY LOWER(name), LOWER(manufacturer)
+                """,
+            )
+        self.send_json(200, {"foods": rows})
 
     def handle_create_food(self):
         user = self.require_user()
@@ -380,9 +496,10 @@ class AppHandler(BaseHTTPRequestHandler):
         if isinstance(food, tuple):
             return self.send_json(*food)
 
-        with db_connection() as connection:
-            try:
-                cursor = connection.execute(
+        try:
+            with db.connection() as connection:
+                food_id = db.execute_insert(
+                    connection,
                     """
                     INSERT INTO foods (name, manufacturer, calories, protein, fat, carbs, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -398,11 +515,10 @@ class AppHandler(BaseHTTPRequestHandler):
                         now_iso(),
                     ),
                 )
-                connection.commit()
-            except sqlite3.IntegrityError:
-                return self.send_json(409, {"error": "Такое блюдо с этим изготовителем уже есть в справочнике."})
+        except (sqlite3.IntegrityError, UniqueViolation):
+            return self.send_json(409, {"error": "Такое блюдо с этим изготовителем уже есть в справочнике."})
 
-        self.send_json(201, {"id": cursor.lastrowid})
+        self.send_json(201, {"id": food_id})
 
     def handle_update_food(self):
         user = self.require_user()
@@ -418,9 +534,10 @@ class AppHandler(BaseHTTPRequestHandler):
         if isinstance(food, tuple):
             return self.send_json(*food)
 
-        with db_connection() as connection:
-            try:
-                cursor = connection.execute(
+        try:
+            with db.connection() as connection:
+                cursor = db.execute(
+                    connection,
                     """
                     UPDATE foods
                     SET name = ?, manufacturer = ?, calories = ?, protein = ?, fat = ?, carbs = ?, updated_at = ?
@@ -437,11 +554,11 @@ class AppHandler(BaseHTTPRequestHandler):
                         food_id,
                     ),
                 )
-                connection.commit()
-            except sqlite3.IntegrityError:
-                return self.send_json(409, {"error": "Такое блюдо с этим изготовителем уже есть в справочнике."})
+                updated = cursor.rowcount
+        except (sqlite3.IntegrityError, UniqueViolation):
+            return self.send_json(409, {"error": "Такое блюдо с этим изготовителем уже есть в справочнике."})
 
-        if cursor.rowcount == 0:
+        if updated == 0:
             return self.send_json(404, {"error": "Блюдо не найдено."})
         self.send_json(200, {"ok": True})
 
@@ -454,11 +571,11 @@ class AppHandler(BaseHTTPRequestHandler):
         if not food_id:
             return self.send_json(400, {"error": "Некорректный идентификатор блюда."})
 
-        with db_connection() as connection:
-            cursor = connection.execute("DELETE FROM foods WHERE id = ?", (food_id,))
-            connection.commit()
+        with db.connection() as connection:
+            cursor = db.execute(connection, "DELETE FROM foods WHERE id = ?", (food_id,))
+            deleted = cursor.rowcount
 
-        if cursor.rowcount == 0:
+        if deleted == 0:
             return self.send_json(404, {"error": "Блюдо не найдено."})
         self.send_json(200, {"ok": True})
 
@@ -467,7 +584,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if not user:
             return
 
-        with db_connection() as connection:
+        with db.connection() as connection:
             goals = get_goals(connection, user["id"])
         self.send_json(200, {"goals": goals})
 
@@ -487,8 +604,9 @@ class AppHandler(BaseHTTPRequestHandler):
         except (KeyError, TypeError, ValueError):
             return self.send_json(400, {"error": "Передайте корректные значения целей."})
 
-        with db_connection() as connection:
-            connection.execute(
+        with db.connection() as connection:
+            db.execute(
+                connection,
                 """
                 INSERT INTO goals (user_id, calories, protein, fat, carbs, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -501,7 +619,6 @@ class AppHandler(BaseHTTPRequestHandler):
                 """,
                 (user["id"], goals["calories"], goals["protein"], goals["fat"], goals["carbs"], now_iso()),
             )
-            connection.commit()
 
         self.send_json(200, {"goals": goals})
 
@@ -514,7 +631,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if not date_value:
             return self.send_json(400, {"error": "Нужно передать дату."})
 
-        with db_connection() as connection:
+        with db.connection() as connection:
             entries = get_entries_for_date(connection, user["id"], date_value)
         self.send_json(200, {"entries": entries})
 
@@ -534,21 +651,21 @@ class AppHandler(BaseHTTPRequestHandler):
         if grams <= 0:
             return self.send_json(400, {"error": "Вес должен быть больше нуля."})
 
-        with db_connection() as connection:
-            food_exists = connection.execute("SELECT id FROM foods WHERE id = ?", (food_id,)).fetchone()
+        with db.connection() as connection:
+            food_exists = db.fetchone(connection, "SELECT id FROM foods WHERE id = ?", (food_id,))
             if not food_exists:
                 return self.send_json(404, {"error": "Блюдо не найдено в справочнике."})
 
-            cursor = connection.execute(
+            entry_id = db.execute_insert(
+                connection,
                 """
                 INSERT INTO entries (user_id, food_id, entry_date, grams, created_at)
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (user["id"], food_id, date_value, grams, now_iso()),
             )
-            connection.commit()
 
-        self.send_json(201, {"id": cursor.lastrowid})
+        self.send_json(201, {"id": entry_id})
 
     def handle_delete_entry(self):
         user = self.require_user()
@@ -559,14 +676,15 @@ class AppHandler(BaseHTTPRequestHandler):
         if not entry_id:
             return self.send_json(400, {"error": "Некорректный идентификатор записи."})
 
-        with db_connection() as connection:
-            cursor = connection.execute(
+        with db.connection() as connection:
+            cursor = db.execute(
+                connection,
                 "DELETE FROM entries WHERE id = ? AND user_id = ?",
                 (entry_id, user["id"]),
             )
-            connection.commit()
+            deleted = cursor.rowcount
 
-        if cursor.rowcount == 0:
+        if deleted == 0:
             return self.send_json(404, {"error": "Запись не найдена."})
         self.send_json(200, {"ok": True})
 
@@ -581,7 +699,7 @@ class AppHandler(BaseHTTPRequestHandler):
         except ValueError:
             days = 14
 
-        with db_connection() as connection:
+        with db.connection() as connection:
             items = get_analytics(connection, user["id"], days)
         self.send_json(200, {"days": items})
 
@@ -614,8 +732,9 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json(401, {"error": "Требуется авторизация."})
             return None
 
-        with db_connection() as connection:
-            row = connection.execute(
+        with db.connection() as connection:
+            row = db.fetchone(
+                connection,
                 """
                 SELECT users.id, users.name, users.email, sessions.expires_at
                 FROM sessions
@@ -623,16 +742,15 @@ class AppHandler(BaseHTTPRequestHandler):
                 WHERE sessions.token = ?
                 """,
                 (token,),
-            ).fetchone()
+            )
 
             if not row:
                 self.send_json(401, {"error": "Сессия не найдена."})
                 return None
 
-            expires_at = datetime.fromisoformat(row["expires_at"].replace("Z", ""))
+            expires_at = parse_iso_utc(row["expires_at"])
             if expires_at < datetime.now(UTC):
-                connection.execute("DELETE FROM sessions WHERE token = ?", (token,))
-                connection.commit()
+                db.execute(connection, "DELETE FROM sessions WHERE token = ?", (token,))
                 self.send_json(401, {"error": "Сессия истекла."})
                 return None
 
@@ -693,9 +811,10 @@ class AppHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    init_db()
+    db.init_db()
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "4173"))
     server = ThreadingHTTPServer((host, port), AppHandler)
-    print(f"Calorie Compass server running on http://{host}:{port} with DB {DB_PATH}")
+    backend = "PostgreSQL" if USING_POSTGRES else f"SQLite ({DB_PATH})"
+    print(f"Calorie Compass server running on http://{host}:{port} using {backend}")
     server.serve_forever()

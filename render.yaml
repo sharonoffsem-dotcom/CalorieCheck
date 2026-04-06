@@ -1,19 +1,22 @@
+databases:
+  - name: calorie-compass-db
+    databaseName: calorie_compass
+    user: calorie_compass
+
 services:
   - type: web
     name: calorie-compass
     runtime: docker
     plan: free
     healthCheckPath: /healthz
-    disk:
-      name: calorie-compass-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: calorie-compass-db
+          property: connectionString
       - key: HOST
         value: 0.0.0.0
       - key: PORT
         value: 4173
-      - key: DATA_DIR
-        value: /data
       - key: COOKIE_SECURE
         value: "true"
